@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.io Counter</title>
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js'
+        integrity='sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=='
+        crossorigin='anonymous'></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.0/socket.io.js"></script>
+    <script>
+        $(document).ready(function () {
+            const urlParams = new URLSearchParams(window.location.search);
+            const uuid = urlParams.get('uuid');
+            const projectId = urlParams.get('project_id');
+
+            if (uuid && projectId) {
+                // Connect to the server using Socket.io with query parameters
+                const socket = io({ query: { uuid, projectId } });
+
+                $('h1').html(uuid);
+
+                // Update the QR code image on the page
+                socket.on('qrCode', (qrCodeDataUrl) => {
+                    $('#qrCodeImage').attr('src', qrCodeDataUrl);
+                });
+
+                // Update the message on the page
+                socket.on('message', (message) => {
+                    $('#p').html(message);
+                    if (message === 'Connected') {
+                        $('#qrCodeImage').hide(); // Hide the QR code image when connected
+                    }
+                });
+
+                socket.on('disconnect', () => {
+                    $('#p').html('Disconnected from server');
+                });
+            } else {
+                // Handle the case where UUID or project_id is missing
+                console.error('UUID or project_id is missing from the URL.');
+            }
+        });
+    </script>
+</head>
+
+<body>
+    <h1>Welcome to the Socket.io</h1>
+    <div style="border: 1px solid; width: 280px;">
+        <img id="qrCodeImage" alt="QR Code"> <br>
+        <span id="p" style="margin: auto;">Loading...</span>
+    </div>
+</body>
+
+</html>
