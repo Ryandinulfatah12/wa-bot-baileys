@@ -3,6 +3,8 @@ const http = require('http');
 const socketIO = require('socket.io');
 const qrcode = require('qrcode');
 const fs = require('fs');
+const path = require('path');
+const cors = require('cors');
 
 require('dotenv').config();
 
@@ -13,12 +15,11 @@ const io = socketIO(server);
 app.set('view engine', 'ejs');
 app.use(express.json());
 app.use(express.static(__dirname + '/public'));
+app.use(cors()); // Enable CORS
 
 const connectedDevices = {};
 
 io.on('connection', (socket) => {
-    console.log(process.env.URL_LOCAL);
-
     const uuid = socket.handshake.query.uuid;
     const projectId = socket.handshake.query.projectId;
 
@@ -27,8 +28,9 @@ io.on('connection', (socket) => {
             connectedDevices[projectId] = { socket, connected: false, uuid, projectId, qrCodeDataURL: null };
             connectionLogicMultiDevice(projectId);
         } else {
-            // If the device is not connected, resend the QR code
-            if (!connectedDevices[projectId].connected && connectedDevices[projectId].qrCodeDataURL) {
+            if (connectedDevices[projectId].connected) {
+                socket.emit('message', 'Connected');
+            } else if (connectedDevices[projectId].qrCodeDataURL) {
                 socket.emit('qrCode', connectedDevices[projectId].qrCodeDataURL);
                 socket.emit('message', 'Waiting to connect');
             }
@@ -37,7 +39,6 @@ io.on('connection', (socket) => {
 
         socket.on('disconnect', () => {
             if (connectedDevices[projectId]) {
-                connectedDevices[projectId].connected = false;
                 console.log(`Device with projectId ${projectId} disconnected`);
             }
         });
@@ -91,58 +92,77 @@ const {
 const makeWASocket = require('@whiskeysockets/baileys').default;
 
 async function connectionLogicMultiDevice(projectId) {
-    const { state, saveCreds } = await useMultiFileAuthState(`auth_info_baileys_${projectId}`);
-    const sock = makeWASocket({
-        printQRInTerminal: false,
-        auth: state
-    });
-    connectedDevices[projectId].sock = sock;
+    const authDir = `auth_info_baileys_${projectId}`;
+    const credsPath = path.join(authDir, 'creds.json');
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(authDir);
+        const sock = makeWASocket({
+            printQRInTerminal: false,
+            auth: state
+        });
 
-        console.log('connection', connection);
+        connectedDevices[projectId].sock = sock;
 
-        if (qr) {
-            try {
-                const qrCodeDataURL = await qrcode.toDataURL(qr);
-                connectedDevices[projectId].qrCodeDataURL = qrCodeDataURL;
-                connectedDevices[projectId].socket.emit('qrCode', qrCodeDataURL);
-                connectedDevices[projectId].socket.emit('message', 'Waiting to connect');
-            } catch (error) {
-                console.error('Error generating QR code:', error);
-            }
-        }
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
 
-        if (connection === 'open') {
-            connectedDevices[projectId].socket.emit('message', 'Connected');
-            connectedDevices[projectId].connected = true;
-            console.log(`Device with projectId ${projectId} connected`);
-        }
+            console.log('connection', connection);
 
-        if (connection === 'close') {
-            connectedDevices[projectId].connected = false;
-            const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            const shouldRescan = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
-
-            if (shouldReconnect) {
-                console.log(`Reconnecting device with projectId ${projectId}`);
-                connectionLogicMultiDevice(projectId);
-            }
-
-            if (shouldRescan) {
+            if (qr && !connectedDevices[projectId].connected) {
                 try {
-                    fs.unlinkSync(`auth_info_baileys_${projectId}/creds.json`);
-                    console.log(`Rescanning device with projectId ${projectId}`);
-                    connectionLogicMultiDevice(projectId);
+                    const qrCodeDataURL = await qrcode.toDataURL(qr);
+                    connectedDevices[projectId].qrCodeDataURL = qrCodeDataURL;
+                    connectedDevices[projectId].socket.emit('qrCode', qrCodeDataURL);
+                    connectedDevices[projectId].socket.emit('message', 'Waiting to connect');
                 } catch (error) {
-                    console.error('Error clearing creds.json:', error);
+                    console.error('Error generating QR code:', error);
                 }
             }
-        }
-    });
 
-    sock.ev.on('creds.update', saveCreds);
+            if (connection === 'open') {
+                connectedDevices[projectId].connected = true;
+                connectedDevices[projectId].socket.emit('message', 'Connected');
+                console.log(`Device with projectId ${projectId} connected`);
+            }
+
+            if (connection === 'close') {
+                const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+                const shouldRescan = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
+
+                if (shouldReconnect) {
+                    console.log(`Reconnecting device with projectId ${projectId}`);
+                    connectionLogicMultiDevice(projectId);
+                }
+
+                if (shouldRescan && fs.existsSync(credsPath)) {
+                    try {
+                        fs.unlinkSync(credsPath);
+                        connectedDevices[projectId].connected = false;
+                        connectedDevices[projectId].qrCodeDataURL = null;
+                        console.log(`Rescanning device with projectId ${projectId}`);
+                        connectionLogicMultiDevice(projectId);
+                    } catch (error) {
+                        console.error('Error clearing creds.json:', error);
+                    }
+                }
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        // Check if credentials are already available and connected
+        if (fs.existsSync(credsPath)) {
+            const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+            if (creds && creds.me && creds.me.id) {
+                connectedDevices[projectId].connected = true;
+                connectedDevices[projectId].socket.emit('message', 'Connected');
+                console.log(`Device with projectId ${projectId} already connected`);
+            }
+        }
+    } catch (error) {
+        console.error('Error in connectionLogicMultiDevice:', error);
+    }
 }
 
 const PORT = process.env.PORT || 3000;

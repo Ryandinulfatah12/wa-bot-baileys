@@ -23,7 +23,7 @@
 
                 // Update the QR code image on the page
                 socket.on('qrCode', (qrCodeDataUrl) => {
-                    $('#qrCodeImage').attr('src', qrCodeDataUrl);
+                    $('#qrCodeImage').attr('src', qrCodeDataUrl).show();
                 });
 
                 // Update the message on the page
@@ -48,7 +48,7 @@
 <body>
     <h1>Welcome to the Socket.io</h1>
     <div style="border: 1px solid; width: 280px;">
-        <img id="qrCodeImage" alt="QR Code"> <br>
+        <img id="qrCodeImage" alt="QR Code" style="display:none;"> <br>
         <span id="p" style="margin: auto;">Loading...</span>
     </div>
 </body>
